@@ -1,26 +1,33 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
+import { playCompletionChime, setAmbientSound } from '../utils/soundscape';
 
-const WORK_DURATION = 25 * 60; // 1500 seconds
+const SESSIONS = [
+  { id: 'work', label: '🧠 Focus (25m)', duration: 25 * 60 },
+  { id: 'short', label: '☕ Short Break (5m)', duration: 5 * 60 },
+  { id: 'long', label: '🌴 Long Break (15m)', duration: 15 * 60 },
+  { id: 'demo', label: '⚡ Demo Mode (1m)', duration: 60 },
+];
 
-// Format seconds → MM:SS
 function formatTime(secs) {
   const m = Math.floor(secs / 60).toString().padStart(2, '0');
   const s = (secs % 60).toString().padStart(2, '0');
   return `${m}:${s}`;
 }
 
-/**
- * PomodoroTimer
- * Props:
- *   onSessionComplete(duration): called when timer reaches 0
- */
 export default function PomodoroTimer({ onSessionComplete }) {
-  const [timeRemaining, setTimeRemaining] = useState(WORK_DURATION);
+  const [selectedMode, setSelectedMode] = useState(SESSIONS[0]);
+  const [timeRemaining, setTimeRemaining] = useState(SESSIONS[0].duration);
   const [isRunning, setIsRunning] = useState(false);
   const [isDone, setIsDone] = useState(false);
+
+  // Focus Task Goal input
+  const [taskGoal, setTaskGoal] = useState('');
+
+  // Ambient Sound State
+  const [ambientType, setAmbientType] = useState('none');
+
   const intervalRef = useRef(null);
 
-  // ── Clear interval helper ────────────────────────────────────────────────
   const clearTimer = useCallback(() => {
     if (intervalRef.current) {
       clearInterval(intervalRef.current);
@@ -28,7 +35,21 @@ export default function PomodoroTimer({ onSessionComplete }) {
     }
   }, []);
 
-  // ── Tick every second ────────────────────────────────────────────────────
+  // Switch session mode
+  const handleModeChange = (mode) => {
+    clearTimer();
+    setSelectedMode(mode);
+    setTimeRemaining(mode.duration);
+    setIsRunning(false);
+    setIsDone(false);
+  };
+
+  // Change ambient sound
+  const handleAmbientChange = (type) => {
+    setAmbientType(type);
+    setAmbientSound(type);
+  };
+
   useEffect(() => {
     if (isRunning) {
       intervalRef.current = setInterval(() => {
@@ -37,7 +58,8 @@ export default function PomodoroTimer({ onSessionComplete }) {
             clearTimer();
             setIsRunning(false);
             setIsDone(true);
-            onSessionComplete?.(WORK_DURATION);
+            playCompletionChime();
+            onSessionComplete?.(selectedMode.duration);
             return 0;
           }
           return prev - 1;
@@ -47,10 +69,9 @@ export default function PomodoroTimer({ onSessionComplete }) {
       clearTimer();
     }
 
-    return clearTimer; // cleanup on unmount / dep change
-  }, [isRunning, clearTimer, onSessionComplete]);
+    return clearTimer;
+  }, [isRunning, clearTimer, onSessionComplete, selectedMode]);
 
-  // ── Controls ─────────────────────────────────────────────────────────────
   const handleStart = () => {
     if (isDone) return;
     setIsRunning(true);
@@ -64,31 +85,54 @@ export default function PomodoroTimer({ onSessionComplete }) {
     clearTimer();
     setIsRunning(false);
     setIsDone(false);
-    setTimeRemaining(WORK_DURATION);
+    setTimeRemaining(selectedMode.duration);
   };
 
-  // ── SVG Circle progress ──────────────────────────────────────────────────
-  const SIZE = 240;          // SVG viewport
+  // SVG Progress calculation
+  const SIZE = 240;
   const STROKE = 12;
-  const RADIUS = (SIZE - STROKE) / 2;   // 114
+  const RADIUS = (SIZE - STROKE) / 2;
   const CIRCUMFERENCE = 2 * Math.PI * RADIUS;
-  const progress = timeRemaining / WORK_DURATION;     // 1 → 0
-  const dashOffset = CIRCUMFERENCE * (1 - progress);  // grows as time passes
+  const progress = timeRemaining / selectedMode.duration;
+  const dashOffset = CIRCUMFERENCE * (1 - progress);
 
-  // Color shifts from purple → blue as time decreases
-  const hue = Math.round(270 - (1 - progress) * 50);  // 270 (purple) → 220 (blue)
+  const hue = Math.round(270 - (1 - progress) * 50);
   const arcColor = `hsl(${hue}, 85%, 65%)`;
 
   return (
     <div className="pomodoro-wrapper">
-      {/* ── Session complete banner ── */}
+      {/* Mode Selector Buttons */}
+      <div className="pomodoro-mode-selector">
+        {SESSIONS.map((mode) => (
+          <button
+            key={mode.id}
+            className={`mode-btn ${selectedMode.id === mode.id ? 'active' : ''}`}
+            onClick={() => handleModeChange(mode)}
+          >
+            {mode.label}
+          </button>
+        ))}
+      </div>
+
+      {/* Goal Input Field */}
+      <div className="pomodoro-task-input-wrap">
+        <input
+          type="text"
+          className="input pomodoro-task-input"
+          placeholder="🎯 What are you focusing on right now?"
+          value={taskGoal}
+          onChange={(e) => setTaskGoal(e.target.value)}
+        />
+      </div>
+
+      {/* Done Banner */}
       {isDone && (
         <div className="pomodoro-done-banner" role="status">
-          🎉 Session Complete! Great focus!
+          🎉 {selectedMode.id === 'work' || selectedMode.id === 'demo' ? 'Focus Session Complete! +50 XP Earned!' : 'Break Time Complete!'}
         </div>
       )}
 
-      {/* ── Circular timer ── */}
+      {/* SVG Timer */}
       <div className="pomodoro-circle-wrap">
         <svg
           className="pomodoro-svg"
@@ -97,7 +141,6 @@ export default function PomodoroTimer({ onSessionComplete }) {
           height={SIZE}
           aria-label={`Timer: ${formatTime(timeRemaining)} remaining`}
         >
-          {/* Background track */}
           <circle
             cx={SIZE / 2}
             cy={SIZE / 2}
@@ -106,7 +149,6 @@ export default function PomodoroTimer({ onSessionComplete }) {
             stroke="rgba(255,255,255,0.06)"
             strokeWidth={STROKE}
           />
-          {/* Progress arc */}
           <circle
             cx={SIZE / 2}
             cy={SIZE / 2}
@@ -125,16 +167,20 @@ export default function PomodoroTimer({ onSessionComplete }) {
           />
         </svg>
 
-        {/* Time label inside circle */}
         <div className="pomodoro-time-label">
           <span className="pomodoro-time">{formatTime(timeRemaining)}</span>
           <span className="pomodoro-label">
-            {isDone ? 'Done!' : isRunning ? 'Focusing…' : 'Focus Session'}
+            {isDone ? 'Done!' : isRunning ? 'Focusing…' : selectedMode.label.split(' ')[1]}
           </span>
+          {taskGoal && isRunning && (
+            <span className="pomodoro-task-active-tag">
+              📌 {taskGoal}
+            </span>
+          )}
         </div>
       </div>
 
-      {/* ── Controls ── */}
+      {/* Controls */}
       <div className="pomodoro-controls">
         {!isRunning ? (
           <button
@@ -143,7 +189,7 @@ export default function PomodoroTimer({ onSessionComplete }) {
             disabled={isDone}
             id="timer-start"
           >
-            ▶ Start
+            ▶ Start Session
           </button>
         ) : (
           <button
@@ -163,13 +209,34 @@ export default function PomodoroTimer({ onSessionComplete }) {
         </button>
       </div>
 
-      {/* ── Session info ── */}
+      {/* Ambient Sound Generators */}
+      <div className="pomodoro-ambient-bar">
+        <span className="ambient-label">🎵 Ambient Sound:</span>
+        <div className="ambient-options">
+          {[
+            { id: 'none', label: 'Off' },
+            { id: 'rain', label: '🌧️ Rain' },
+            { id: 'whitenoise', label: '📻 White Noise' },
+            { id: 'binaural', label: '🧘 Binaural' },
+          ].map((item) => (
+            <button
+              key={item.id}
+              className={`ambient-btn ${ambientType === item.id ? 'active' : ''}`}
+              onClick={() => handleAmbientChange(item.id)}
+            >
+              {item.label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* Session info */}
       <div className="pomodoro-info">
         <span className="pomodoro-info-item">
           <span className="pomodoro-info-dot" style={{ background: arcColor }} />
           {Math.round((1 - progress) * 100)}% complete
         </span>
-        <span className="pomodoro-info-item">25 min session</span>
+        <span className="pomodoro-info-item">{Math.round(selectedMode.duration / 60)} min target</span>
       </div>
     </div>
   );

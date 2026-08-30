@@ -1,44 +1,31 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { signOut } from 'firebase/auth';
-import { doc, onSnapshot } from 'firebase/firestore';
+import { doc, onSnapshot, updateDoc, increment } from 'firebase/firestore';
 import { auth, db } from '../services/firebase';
 import { useAuth } from '../utils/useAuth';
 import { awardSessionXP } from '../services/xpService';
+import { calculateLevel } from '../utils/xp';
 import Spinner from '../components/Spinner';
 import PomodoroTimer from '../components/PomodoroTimer';
 import PlayerStatsCard from '../components/PlayerStatsCard';
 import LevelUpModal from '../components/LevelUpModal';
-
-// Upcoming feature placeholder cards
-const FEATURES = [
-  {
-    icon: '🏅',
-    iconBg: 'rgba(139,92,246,0.12)',
-    iconBorder: 'rgba(139,92,246,0.25)',
-    title: 'Leaderboard',
-    desc: 'Compete globally with other learners in real-time XP rankings.',
-  },
-  {
-    icon: '📊',
-    iconBg: 'rgba(16,185,129,0.12)',
-    iconBorder: 'rgba(16,185,129,0.25)',
-    title: 'Study Analytics',
-    desc: 'Deep insights into your focus patterns and daily performance.',
-  },
-];
+import Leaderboard from '../components/Leaderboard';
+import FocusQuests from '../components/FocusQuests';
+import StudyAnalytics from '../components/StudyAnalytics';
 
 export default function Dashboard() {
   const { user } = useAuth();
   const navigate = useNavigate();
 
+  const [activeTab, setActiveTab] = useState('timer'); // 'timer' | 'quests' | 'leaderboard' | 'analytics'
   const [userData, setUserData] = useState(null);
   const [dataLoading, setDataLoading] = useState(true);
   const [signingOut, setSigningOut] = useState(false);
 
   // XP award state
-  const [xpToast, setXpToast] = useState(null);      // { amount } | null
-  const [levelUpData, setLevelUpData] = useState(null); // { level } | null
+  const [xpToast, setXpToast] = useState(null);
+  const [levelUpData, setLevelUpData] = useState(null);
   const [awardingXP, setAwardingXP] = useState(false);
   const xpToastTimer = useRef(null);
 
@@ -62,14 +49,14 @@ export default function Dashboard() {
     return () => unsubscribe();
   }, [user]);
 
-  // ── Show XP toast (auto-dismiss after 3s) ───────────────────────────────
+  // ── Show XP toast ────────────────────────────────────────────────────────
   const showXPToast = useCallback((amount) => {
     setXpToast({ amount });
     clearTimeout(xpToastTimer.current);
     xpToastTimer.current = setTimeout(() => setXpToast(null), 3000);
   }, []);
 
-  // ── Called when Pomodoro session completes ───────────────────────────────
+  // ── Session completion XP ────────────────────────────────────────────────
   const handleSessionComplete = useCallback(async () => {
     if (!user || awardingXP) return;
 
@@ -88,6 +75,29 @@ export default function Dashboard() {
     }
   }, [user, awardingXP, showXPToast]);
 
+  // ── Claim Quest Bonus XP ──────────────────────────────────────────────────
+  const handleClaimQuestXP = useCallback(async (amount) => {
+    if (!user) return;
+    try {
+      const userRef = doc(db, 'users', user.uid);
+      const newXP = (userData?.xp ?? 0) + amount;
+      const newLevel = calculateLevel(newXP);
+      const oldLevel = userData?.level ?? 1;
+
+      await updateDoc(userRef, {
+        xp: increment(amount),
+        level: newLevel,
+      });
+
+      showXPToast(amount);
+      if (newLevel > oldLevel) {
+        setLevelUpData({ level: newLevel });
+      }
+    } catch (err) {
+      console.error('Failed to claim quest XP:', err);
+    }
+  }, [user, userData, showXPToast]);
+
   // ── Sign out ─────────────────────────────────────────────────────────────
   const handleSignOut = async () => {
     setSigningOut(true);
@@ -100,7 +110,6 @@ export default function Dashboard() {
     }
   };
 
-  // ── Display name helpers ─────────────────────────────────────────────────
   const displayName = userData?.name || user?.email?.split('@')[0] || 'Warrior';
   const initials = displayName.split(' ').map((w) => w[0]).join('').slice(0, 2).toUpperCase();
 
@@ -127,6 +136,35 @@ export default function Dashboard() {
         {/* ── Header ── */}
         <header className="dashboard-header">
           <div className="dashboard-logo">⚡ FocusWar</div>
+
+          {/* Navigation Tabs */}
+          <nav className="dashboard-nav">
+            <button
+              className={`nav-tab-btn ${activeTab === 'timer' ? 'active' : ''}`}
+              onClick={() => setActiveTab('timer')}
+            >
+              ⏱️ Focus
+            </button>
+            <button
+              className={`nav-tab-btn ${activeTab === 'quests' ? 'active' : ''}`}
+              onClick={() => setActiveTab('quests')}
+            >
+              🎯 Quests
+            </button>
+            <button
+              className={`nav-tab-btn ${activeTab === 'leaderboard' ? 'active' : ''}`}
+              onClick={() => setActiveTab('leaderboard')}
+            >
+              🏅 Leaderboard
+            </button>
+            <button
+              className={`nav-tab-btn ${activeTab === 'analytics' ? 'active' : ''}`}
+              onClick={() => setActiveTab('analytics')}
+            >
+              📊 Analytics
+            </button>
+          </nav>
+
           <div className="dashboard-user">
             <div className="user-avatar" title={displayName}>{initials}</div>
             <button
@@ -142,99 +180,102 @@ export default function Dashboard() {
 
         {/* ── Main Content ── */}
         <main className="dashboard-content">
-          {/* Welcome */}
-          <section className="welcome-section">
-            <h2 className="welcome-title">
-              Welcome back, {dataLoading ? '…' : displayName} 👋
-            </h2>
-            <p className="welcome-subtitle">
-              You&apos;re on the path to mastery. Keep going.
-            </p>
-          </section>
+          {activeTab === 'timer' && (
+            <>
+              {/* Welcome */}
+              <section className="welcome-section">
+                <h2 className="welcome-title">
+                  Welcome back, {dataLoading ? '…' : displayName} 👋
+                </h2>
+                <p className="welcome-subtitle">
+                  You&apos;re on the path to mastery. Select a mode and start focusing.
+                </p>
+              </section>
 
-          {/* ── Player Stats Card ── */}
-          <section>
-            <h3 className="section-title"><span>🎮</span> Player Profile</h3>
-            <PlayerStatsCard userData={userData} loading={dataLoading} />
-          </section>
+              {/* Player Stats Card */}
+              <section>
+                <h3 className="section-title"><span>🎮</span> Player Profile</h3>
+                <PlayerStatsCard userData={userData} loading={dataLoading} />
+              </section>
 
-          {/* ── Pomodoro Timer ── */}
-          <section className="timer-section">
-            <h3 className="section-title">
-              <span>⏱️</span> Focus Timer
-              {awardingXP && (
-                <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)', fontWeight: 500 }}>
-                  &nbsp;· Saving XP…
-                </span>
-              )}
-            </h3>
-            <div className="glass-card" style={{ overflow: 'hidden' }}>
-              <PomodoroTimer onSessionComplete={handleSessionComplete} />
-            </div>
-          </section>
-
-          {/* ── Quick Stats Row ── */}
-          <section>
-            <h3 className="section-title"><span>📈</span> Your Stats</h3>
-            <div className="stats-grid">
-              <div className="glass-card stat-card">
-                <div className="stat-icon">🏆</div>
-                <div className="stat-label">Total XP</div>
-                {dataLoading
-                  ? <div className="spinner" style={{ marginTop: 4 }} />
-                  : <div className="stat-value">{userData?.xp ?? 0} <span style={{ fontSize: '1rem', fontWeight: 600 }}>XP</span></div>
-                }
-                <div className="stat-sub">Experience points earned</div>
-              </div>
-
-              <div className="glass-card stat-card">
-                <div className="stat-icon blue">⚡</div>
-                <div className="stat-label">Level</div>
-                {dataLoading
-                  ? <div className="spinner" style={{ marginTop: 4 }} />
-                  : <div className="stat-value">{userData?.level ?? 1}</div>
-                }
-                <div className="stat-sub">Current rank level</div>
-              </div>
-
-              <div className="glass-card stat-card">
-                <div className="stat-icon pink">🔥</div>
-                <div className="stat-label">Streak</div>
-                {dataLoading
-                  ? <div className="spinner" style={{ marginTop: 4 }} />
-                  : <div className="stat-value">{userData?.streak ?? 0} <span style={{ fontSize: '1rem', fontWeight: 600 }}>days</span></div>
-                }
-                <div className="stat-sub">Consecutive study days</div>
-              </div>
-
-              <div className="glass-card stat-card">
-                <div className="stat-icon green">🌍</div>
-                <div className="stat-label">Rank</div>
-                <div className="stat-value">—</div>
-                <div className="coming-soon-badge">⏳ Coming Soon</div>
-              </div>
-            </div>
-          </section>
-
-          {/* Upcoming Features */}
-          <section className="placeholder-section">
-            <h3 className="section-title"><span>🚀</span> Coming Features</h3>
-            {FEATURES.map((feat) => (
-              <div key={feat.title} className="glass-card placeholder-card">
-                <div
-                  className="placeholder-icon-wrap"
-                  style={{ background: feat.iconBg, border: `1px solid ${feat.iconBorder}` }}
-                >
-                  {feat.icon}
+              {/* Pomodoro Timer */}
+              <section className="timer-section">
+                <h3 className="section-title">
+                  <span>⏱️</span> Focus Timer
+                  {awardingXP && (
+                    <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)', fontWeight: 500 }}>
+                      &nbsp;· Saving XP…
+                    </span>
+                  )}
+                </h3>
+                <div className="glass-card" style={{ overflow: 'hidden' }}>
+                  <PomodoroTimer onSessionComplete={handleSessionComplete} />
                 </div>
-                <div className="placeholder-info">
-                  <div className="placeholder-title">{feat.title}</div>
-                  <div className="placeholder-desc">{feat.desc}</div>
+              </section>
+
+              {/* Quick Stats Grid */}
+              <section>
+                <h3 className="section-title"><span>📈</span> Your Overview</h3>
+                <div className="stats-grid">
+                  <div className="glass-card stat-card">
+                    <div className="stat-icon">🏆</div>
+                    <div className="stat-label">Total XP</div>
+                    {dataLoading ? (
+                      <div className="spinner" style={{ marginTop: 4 }} />
+                    ) : (
+                      <div className="stat-value">
+                        {userData?.xp ?? 0} <span style={{ fontSize: '1rem', fontWeight: 600 }}>XP</span>
+                      </div>
+                    )}
+                    <div className="stat-sub">Experience points earned</div>
+                  </div>
+
+                  <div className="glass-card stat-card">
+                    <div className="stat-icon blue">⚡</div>
+                    <div className="stat-label">Level</div>
+                    {dataLoading ? (
+                      <div className="spinner" style={{ marginTop: 4 }} />
+                    ) : (
+                      <div className="stat-value">{userData?.level ?? 1}</div>
+                    )}
+                    <div className="stat-sub">Current rank level</div>
+                  </div>
+
+                  <div className="glass-card stat-card">
+                    <div className="stat-icon pink">🔥</div>
+                    <div className="stat-label">Streak</div>
+                    {dataLoading ? (
+                      <div className="spinner" style={{ marginTop: 4 }} />
+                    ) : (
+                      <div className="stat-value">
+                        {userData?.streak ?? 0} <span style={{ fontSize: '1rem', fontWeight: 600 }}>days</span>
+                      </div>
+                    )}
+                    <div className="stat-sub">Consecutive study days</div>
+                  </div>
+
+                  <div className="glass-card stat-card" onClick={() => setActiveTab('leaderboard')} style={{ cursor: 'pointer' }}>
+                    <div className="stat-icon green">🌍</div>
+                    <div className="stat-label">Global Arena</div>
+                    <div className="stat-value">View</div>
+                    <div className="stat-sub">Click to open rankings</div>
+                  </div>
                 </div>
-                <div className="coming-soon-badge">Soon</div>
-              </div>
-            ))}
-          </section>
+              </section>
+            </>
+          )}
+
+          {activeTab === 'quests' && (
+            <FocusQuests userData={userData} onClaimXP={handleClaimQuestXP} />
+          )}
+
+          {activeTab === 'leaderboard' && (
+            <Leaderboard currentUserData={userData} />
+          )}
+
+          {activeTab === 'analytics' && (
+            <StudyAnalytics userData={userData} />
+          )}
         </main>
       </div>
     </>
