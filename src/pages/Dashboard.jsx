@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { signOut } from 'firebase/auth';
 import { doc, onSnapshot, updateDoc, increment } from 'firebase/firestore';
 import { auth, db } from '../services/firebase';
-import { useAuth } from '../utils/useAuth';
+import { useAuth, disableGuestMode } from '../utils/useAuth';
 import { awardSessionXP } from '../services/xpService';
 import { calculateLevel } from '../utils/xp';
 import Spinner from '../components/Spinner';
@@ -13,9 +13,31 @@ import LevelUpModal from '../components/LevelUpModal';
 import Leaderboard from '../components/Leaderboard';
 import FocusQuests from '../components/FocusQuests';
 import StudyAnalytics from '../components/StudyAnalytics';
+import FocusTaskList from '../components/FocusTaskList';
+
+const GUEST_DATA_KEY = 'focuswar_guest_userdata';
+
+function getLocalGuestData() {
+  try {
+    const saved = localStorage.getItem(GUEST_DATA_KEY);
+    return saved
+      ? JSON.parse(saved)
+      : { name: 'Focus Warrior', xp: 120, level: 2, streak: 3, sessionsCompleted: 4 };
+  } catch {
+    return { name: 'Focus Warrior', xp: 120, level: 2, streak: 3, sessionsCompleted: 4 };
+  }
+}
+
+function saveLocalGuestData(data) {
+  try {
+    localStorage.setItem(GUEST_DATA_KEY, JSON.stringify(data));
+  } catch (err) {
+    console.warn('Failed to save guest data:', err);
+  }
+}
 
 export default function Dashboard() {
-  const { user } = useAuth();
+  const { user, isGuest } = useAuth();
   const navigate = useNavigate();
 
   const [activeTab, setActiveTab] = useState('timer'); // 'timer' | 'quests' | 'leaderboard' | 'analytics'
@@ -29,88 +51,155 @@ export default function Dashboard() {
   const [awardingXP, setAwardingXP] = useState(false);
   const xpToastTimer = useRef(null);
 
-  // ── Real-time Firestore listener ─────────────────────────────────────────
+  // ── Real-time Firestore listener or Guest Fallback ────────────────────────
   useEffect(() => {
     if (!user) return;
+
+    if (isGuest) {
+      setUserData(getLocalGuestData());
+      setDataLoading(false);
+      return;
+    }
 
     const ref = doc(db, 'users', user.uid);
     const unsubscribe = onSnapshot(
       ref,
       (snap) => {
-        if (snap.exists()) setUserData(snap.data());
+        if (snap.exists()) {
+          setUserData(snap.data());
+        } else {
+          setUserData(getLocalGuestData());
+        }
         setDataLoading(false);
       },
       (err) => {
-        console.error('Firestore listener error:', err);
+        console.warn('Firestore listener fallback to guest mode:', err);
+        setUserData(getLocalGuestData());
         setDataLoading(false);
       }
     );
 
     return () => unsubscribe();
-  }, [user]);
+  }, [user, isGuest]);
 
   // ── Show XP toast ────────────────────────────────────────────────────────
-  const showXPToast = useCallback((amount) => {
-    setXpToast({ amount });
+  const showXPToast = useCallback((amount, message) => {
+    setXpToast({ amount, message });
     clearTimeout(xpToastTimer.current);
     xpToastTimer.current = setTimeout(() => setXpToast(null), 3000);
   }, []);
 
+  // ── Helper to update XP across Guest & Firebase ───────────────────────────
+  const addXP = useCallback(
+    async (amount, toastMessage) => {
+      const oldXP = userData?.xp ?? 0;
+      const oldLevel = userData?.level ?? 1;
+      const newXP = oldXP + amount;
+      const newLevel = calculateLevel(newXP);
+
+      if (isGuest || !user?.uid) {
+        const updated = {
+          ...userData,
+          xp: newXP,
+          level: newLevel,
+          sessionsCompleted: (userData?.sessionsCompleted ?? 0) + (amount === 50 ? 1 : 0),
+        };
+        setUserData(updated);
+        saveLocalGuestData(updated);
+        showXPToast(amount, toastMessage);
+        if (newLevel > oldLevel) {
+          setLevelUpData({ level: newLevel });
+        }
+        return;
+      }
+
+      try {
+        const userRef = doc(db, 'users', user.uid);
+        await updateDoc(userRef, {
+          xp: increment(amount),
+          level: newLevel,
+        });
+
+        showXPToast(amount, toastMessage);
+        if (newLevel > oldLevel) {
+          setLevelUpData({ level: newLevel });
+        }
+      } catch (err) {
+        console.warn('Firestore update fallback to local:', err);
+        const updated = {
+          ...userData,
+          xp: newXP,
+          level: newLevel,
+        };
+        setUserData(updated);
+        saveLocalGuestData(updated);
+        showXPToast(amount, toastMessage);
+        if (newLevel > oldLevel) {
+          setLevelUpData({ level: newLevel });
+        }
+      }
+    },
+    [user, isGuest, userData, showXPToast]
+  );
+
   // ── Session completion XP ────────────────────────────────────────────────
   const handleSessionComplete = useCallback(async () => {
     if (!user || awardingXP) return;
-
     setAwardingXP(true);
     try {
-      const result = await awardSessionXP(user.uid);
-      showXPToast(50);
-
-      if (result.didLevelUp) {
-        setLevelUpData({ level: result.newLevel });
+      if (isGuest) {
+        await addXP(50, 'Focus Session Complete!');
+      } else {
+        const result = await awardSessionXP(user.uid);
+        showXPToast(50, 'Focus Session Complete!');
+        if (result.didLevelUp) {
+          setLevelUpData({ level: result.newLevel });
+        }
       }
     } catch (err) {
-      console.error('Failed to award XP:', err);
+      console.warn('Failed to award XP, fallback to local:', err);
+      await addXP(50, 'Focus Session Complete!');
     } finally {
       setAwardingXP(false);
     }
-  }, [user, awardingXP, showXPToast]);
+  }, [user, isGuest, awardingXP, showXPToast, addXP]);
 
   // ── Claim Quest Bonus XP ──────────────────────────────────────────────────
-  const handleClaimQuestXP = useCallback(async (amount) => {
-    if (!user) return;
-    try {
-      const userRef = doc(db, 'users', user.uid);
-      const newXP = (userData?.xp ?? 0) + amount;
-      const newLevel = calculateLevel(newXP);
-      const oldLevel = userData?.level ?? 1;
+  const handleClaimQuestXP = useCallback(
+    async (amount) => {
+      await addXP(amount, 'Quest Milestone Claimed!');
+    },
+    [addXP]
+  );
 
-      await updateDoc(userRef, {
-        xp: increment(amount),
-        level: newLevel,
-      });
-
-      showXPToast(amount);
-      if (newLevel > oldLevel) {
-        setLevelUpData({ level: newLevel });
-      }
-    } catch (err) {
-      console.error('Failed to claim quest XP:', err);
-    }
-  }, [user, userData, showXPToast]);
+  // ── Claim Task Completion XP ──────────────────────────────────────────────
+  const handleCompleteTask = useCallback(
+    async (amount, title) => {
+      await addXP(amount, `Task Done: "${title}"`);
+    },
+    [addXP]
+  );
 
   // ── Sign out ─────────────────────────────────────────────────────────────
   const handleSignOut = async () => {
     setSigningOut(true);
     try {
-      await signOut(auth);
+      if (isGuest) {
+        disableGuestMode();
+      } else {
+        await signOut(auth);
+      }
       navigate('/login', { replace: true });
     } catch (err) {
       console.error('Sign out error:', err);
+      disableGuestMode();
+      navigate('/login', { replace: true });
+    } finally {
       setSigningOut(false);
     }
   };
 
-  const displayName = userData?.name || user?.email?.split('@')[0] || 'Warrior';
+  const displayName = userData?.name || user?.displayName || user?.email?.split('@')[0] || 'Warrior';
   const initials = displayName.split(' ').map((w) => w[0]).join('').slice(0, 2).toUpperCase();
 
   return (
@@ -128,14 +217,16 @@ export default function Dashboard() {
       {/* XP Toast */}
       {xpToast && (
         <div className="xp-toast" role="status" aria-live="polite">
-          ✨ +{xpToast.amount} XP earned!
+          ✨ +{xpToast.amount} XP earned! {xpToast.message && `(${xpToast.message})`}
         </div>
       )}
 
       <div className="dashboard-layout animate-fade">
         {/* ── Header ── */}
         <header className="dashboard-header">
-          <div className="dashboard-logo">⚡ FocusWar</div>
+          <div className="dashboard-logo">
+            ⚡ FocusWar {isGuest && <span className="badge badge-purple" style={{ fontSize: '0.7rem', marginLeft: 8 }}>DEMO</span>}
+          </div>
 
           {/* Navigation Tabs */}
           <nav className="dashboard-nav">
@@ -173,7 +264,7 @@ export default function Dashboard() {
               disabled={signingOut}
               style={{ padding: '8px 16px', fontSize: '0.85rem' }}
             >
-              {signingOut ? <Spinner /> : 'Sign Out'}
+              {signingOut ? <Spinner /> : isGuest ? 'Exit Demo' : 'Sign Out'}
             </button>
           </div>
         </header>
@@ -211,6 +302,11 @@ export default function Dashboard() {
                 <div className="glass-card" style={{ overflow: 'hidden' }}>
                   <PomodoroTimer onSessionComplete={handleSessionComplete} />
                 </div>
+              </section>
+
+              {/* Focus Task Checklist */}
+              <section className="task-section">
+                <FocusTaskList onCompleteTask={handleCompleteTask} />
               </section>
 
               {/* Quick Stats Grid */}
@@ -281,3 +377,4 @@ export default function Dashboard() {
     </>
   );
 }
+

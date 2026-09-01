@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { signInWithEmailAndPassword } from 'firebase/auth';
 import { auth } from '../services/firebase';
+import { enableGuestMode } from '../utils/useAuth';
 import Spinner from '../components/Spinner';
 
 // Map Firebase Auth error codes to friendly messages
@@ -27,6 +28,11 @@ export default function Login() {
   const handleChange = (e) => {
     setForm((prev) => ({ ...prev, [e.target.name]: e.target.value }));
     if (error) setError('');
+  };
+
+  const handleGuestDemo = () => {
+    enableGuestMode('Focus Warrior');
+    navigate('/dashboard', { replace: true });
   };
 
   const handleSubmit = async (e) => {
@@ -60,6 +66,19 @@ export default function Login() {
             <h1 className="auth-title">FocusWar</h1>
             <p className="auth-subtitle">Welcome back. Ready to battle?</p>
           </div>
+
+          {/* Quick Demo Mode Banner */}
+          <div className="demo-mode-box">
+            <button
+              type="button"
+              className="btn btn-primary btn-full demo-btn"
+              onClick={handleGuestDemo}
+            >
+              ⚡ Explore Live Demo Mode (Instant Access)
+            </button>
+          </div>
+
+          <div className="divider">or sign in with credentials</div>
 
           {/* Error message */}
           {error && (
@@ -103,7 +122,7 @@ export default function Login() {
 
             <button
               type="submit"
-              className="btn btn-primary btn-full"
+              className="btn btn-ghost btn-full"
               disabled={loading}
             >
               {loading ? <><Spinner /> Signing in…</> : 'Sign In'}
@@ -121,3 +140,4 @@ export default function Login() {
     </>
   );
 }
+

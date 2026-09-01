@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { playCompletionChime, setAmbientSound } from '../utils/soundscape';
+import { playCompletionChime, setAmbientSound, setAmbientVolume } from '../utils/soundscape';
 
 const SESSIONS = [
   { id: 'work', label: '🧠 Focus (25m)', duration: 25 * 60 },
@@ -23,8 +23,9 @@ export default function PomodoroTimer({ onSessionComplete }) {
   // Focus Task Goal input
   const [taskGoal, setTaskGoal] = useState('');
 
-  // Ambient Sound State
+  // Ambient Sound & Volume State
   const [ambientType, setAmbientType] = useState('none');
+  const [volume, setVolume] = useState(50);
 
   const intervalRef = useRef(null);
 
@@ -47,7 +48,14 @@ export default function PomodoroTimer({ onSessionComplete }) {
   // Change ambient sound
   const handleAmbientChange = (type) => {
     setAmbientType(type);
-    setAmbientSound(type);
+    setAmbientSound(type, volume / 100);
+  };
+
+  // Change volume
+  const handleVolumeChange = (e) => {
+    const val = Number(e.target.value);
+    setVolume(val);
+    setAmbientVolume(val / 100);
   };
 
   useEffect(() => {
@@ -209,15 +217,34 @@ export default function PomodoroTimer({ onSessionComplete }) {
         </button>
       </div>
 
-      {/* Ambient Sound Generators */}
+      {/* Ambient Sound & Volume Bar */}
       <div className="pomodoro-ambient-bar">
-        <span className="ambient-label">🎵 Ambient Sound:</span>
+        <div className="ambient-header-row">
+          <span className="ambient-label">🎵 Ambient Soundscapes:</span>
+          {ambientType !== 'none' && (
+            <div className="volume-control">
+              <span className="vol-icon">🔊 {volume}%</span>
+              <input
+                type="range"
+                min="0"
+                max="100"
+                value={volume}
+                onChange={handleVolumeChange}
+                className="volume-slider"
+                title="Adjust Volume"
+              />
+            </div>
+          )}
+        </div>
         <div className="ambient-options">
           {[
             { id: 'none', label: 'Off' },
             { id: 'rain', label: '🌧️ Rain' },
             { id: 'whitenoise', label: '📻 White Noise' },
             { id: 'binaural', label: '🧘 Binaural' },
+            { id: 'forest', label: '🌲 Forest' },
+            { id: 'cafe', label: '☕ Cafe' },
+            { id: 'deepsynth', label: '🌌 Deep Synth' },
           ].map((item) => (
             <button
               key={item.id}
@@ -241,3 +268,4 @@ export default function PomodoroTimer({ onSessionComplete }) {
     </div>
   );
 }
+
